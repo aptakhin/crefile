@@ -11,6 +11,10 @@
 #   define CREFILE_PLATFORM CREFILE_PLATFORM_WIN32
 #endif
 
+#ifdef __APPLE__
+#   define CREFILE_PLATFORM CREFILE_PLATFORM_DARWIN
+#endif
+
 #ifndef CREFILE_PLATFORM
 #   error "Can't detect current platform for crefile!"
 #endif
@@ -29,18 +33,24 @@ static bool is_slash(const char c) {
 }
 
 
+#if CREFILE_PLATFORM == CREFILE_PLATFORM_WIN32
+const char DefaultSeparator = '\\';
+#else
+const char DefaultSeparator = '/';
+#endif
+
 std::vector<String> split_impl(const char* base, size_t size) {
     std::vector<String> res;
     size_t start_pos = 0;
     for (size_t i = 0; i < size; ++i) {
         if (is_slash(base[i])) {
-            res.push_back(String(base + start_pos, base + i + 1));
+            res.push_back(String{base + start_pos, base + i + 1});
             start_pos = i + 1;
         }
     }
 
     if (size - start_pos > 0) {
-        res.push_back(String(base + start_pos, base + size));
+        res.push_back(String{base + start_pos, base + size});
     }
 
     return res;
@@ -82,8 +92,6 @@ String join(Types... args) {
 
 #if CREFILE_PLATFORM == CREFILE_PLATFORM_WIN32
 
-const char DefaultSeparator = '\\';
-
 class FileInfoImplWin32 {
 public:
 
@@ -93,7 +101,7 @@ public:
     String name() const {
         // TODO: Support long names
         // TODO: Make lazy
-        return String(find_data_.cFileName);
+        return String{find_data_.cFileName};
     }
 
 private:
@@ -299,17 +307,177 @@ PathImplWin32 get_tmp_path() {
     char tmp_path[MAX_PATH + 1];
     WINCHECK(GetTempPath(sizeof(tmp_path) - 1, tmp_path),
         std::runtime_error, "GetTempPath failed");
-    return PathImplWin32(tmp_path);
+    return PathImplWin32{tmp_path};
 }
 
 PathImplWin32 generate_tmp_filename(const PathImplWin32& path, const String& file_prefix) {
     char tmp[MAX_PATH + 1];
     WINCHECK(GetTempFileName(path.path_to_host(), file_prefix.c_str(), 0, tmp),
         std::runtime_error, "GetTempFileName failed");
-    return PathImplWin32(tmp);
+    return PathImplWin32{tmp};
 }
 
 #endif // #if CREFILE_PLATFORM == CREFILE_PLATFORM_WIN32
+
+#if CREFILE_PLATFORM == CREFILE_PLATFORM_DARWIN
+
+class FileInfoImplUnix {
+public:
+
+    void* native_ptr() { return &find_data_; }
+    const void* native_ptr() const { return &find_data_; }
+
+    String name() const {
+        // TODO: Support long names
+        // TODO: Make lazy
+        return String{};
+    }
+
+private:
+    void* find_data_;
+};
+
+class PathImplUnix{
+public:
+    PathImplUnix() {}
+
+    PathImplUnix(const String& path)
+    :   path_(path) {
+    }
+
+    PathImplUnix(const char* path)
+    :   path_(path) {
+    }
+
+//    LPCSTR path_to_host() const {
+//        return PathImplUnix::path_to_host(*this);
+//    }
+//
+//    static LPCSTR path_to_host(const PathImplWin32& path) {
+//        return path.path().c_str();
+//    }
+
+    const String& path() const { return path_; }
+
+    const PathImplUnix& mkdir() const {
+        return PathImplUnix::mkdir(*this);
+    }
+
+    static const PathImplUnix& mkdir(const PathImplUnix& path) {
+        return path;
+    }
+
+    static const PathImplUnix& mkdir_if_not_exists(const PathImplUnix& path) {
+        return path;
+    }
+
+    const PathImplUnix& mkdir_if_not_exists() const {
+        return PathImplUnix::mkdir_if_not_exists(*this);
+    }
+
+    static const PathImplUnix& mkdir_parents(const PathImplUnix& path) {
+        PathImplUnix cur_path;
+        for (auto dir : path.split()) {
+            cur_path = join(cur_path, dir);
+            if (!cur_path.exists()) {
+                cur_path.mkdir();
+            }
+        }
+        return path;
+    }
+
+    const PathImplUnix& mkdir_parents() const {
+        return PathImplUnix::mkdir_parents(*this);
+    }
+
+    std::vector<String> split() const {
+        return crefile::split(path_);
+    }
+
+    bool exists() const {
+        return PathImplUnix::exists(*this);
+    }
+
+    static bool exists(const PathImplUnix& path) {
+        return false;
+    }
+
+    String path_dirname(const String& filename) {
+        auto last_slash = filename.find_last_of('/');
+        if (last_slash == String::npos) {
+            last_slash = filename.find_last_of("\\\\");
+            if (last_slash == String::npos) {
+                return filename;
+            }
+        }
+        return filename.substr(0, last_slash);
+    }
+
+    String path_extension(const String& filename) {
+        const auto last_dot = filename.find_last_of('.');
+        if (last_dot == String::npos) {
+            return "";
+        } else {
+            return filename.substr(last_dot + 1);
+        }
+    }
+
+private:
+    String path_;
+};
+
+
+typedef PathImplUnix Path;
+
+class FileIterImplUnix {
+public:
+    FileIterImplUnix() {
+    }
+
+    ~FileIterImplUnix() {
+
+    }
+
+    FileIterImplUnix(const String& path) {
+
+    }
+
+    bool operator == (const FileIterImplUnix& other) const {
+        return end_ && other.end_;
+    }
+
+    bool operator != (const FileIterImplUnix& other) const {
+        return !(*this == other);
+    }
+
+    FileIterImplUnix& operator ++() {
+        return *this;
+    }
+
+    FileInfoImplUnix operator *() const {
+        return find_data_;
+    }
+
+private:
+    //HANDLE handle_;
+    bool end_ = false;
+    FileInfoImplUnix find_data_;
+};
+
+typedef FileInfoImplUnix FileInfo;
+typedef FileIterImplUnix FileIter;
+
+PathImplUnix get_tmp_path() {
+    char tmp_path[260];
+    return PathImplUnix{tmp_path};
+}
+
+PathImplUnix generate_tmp_filename(const PathImplUnix& path, const String& file_prefix) {
+    char tmp_path[260];
+    return PathImplUnix{tmp_path};
+}
+
+#endif
 
 void path_join_append_one(String& to, const Path& append) {
     if (!to.empty() && !is_slash(to[to.size() - 1])) {

@@ -36,11 +36,15 @@ TEST(file_op, op0) {
 }
 
 TEST(list, dir0) {
+#if CREFILE_PLATFORM == CREFILE_PLATFORM_WIN32
     for (auto file : crefile::iter_dir("C:\\Users\\Alex\\Assembling\\crefile\\tests\\*")) {
         std::cout << file.name() << std::endl;
     }
-
-    int p = 0;
+#else
+    for (auto file : crefile::iter_dir("/usr")) {
+        //std::cout << file.name() << std::endl;
+    }
+#endif
 }
 
 int main(int argc, char* argv[]) {
