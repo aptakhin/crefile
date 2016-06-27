@@ -19,6 +19,11 @@
 #   error "Can't detect current platform for crefile!"
 #endif
 
+#if CREFILE_PLATFORM == CREFILE_PLATFORM_DARWIN
+//#   include <unistd.h>
+#   include <sys/stat.h>
+#endif
+
 #if CREFILE_PLATFORM == CREFILE_PLATFORM_WIN32
 #   include <windows.h>
 #   include <tchar.h>
@@ -27,6 +32,8 @@
 namespace crefile {
 
 typedef std::string String;
+
+class NotImplementedException : public std::exception {};
 
 static bool is_slash(const char c) {
     return c == '/' || c == '\\';
@@ -138,11 +145,11 @@ public:
     PathImplWin32() {}
 
     PathImplWin32(const String& path)
-    :   path_(path) {
+    :   path_{path} {
     }
 
     PathImplWin32(const char* path)
-    :   path_(path) {
+    :   path_{path} {
     }
 
     LPCSTR path_to_host() const {
@@ -250,8 +257,8 @@ typedef PathImplWin32 Path;
 class FileIterImplWin32 {
 public:
     FileIterImplWin32()
-    :   handle_(0),
-        end_(true) {
+    :   handle_{0},
+        end_{true} {
 
     }
 
@@ -328,8 +335,6 @@ public:
     const void* native_ptr() const { return &find_data_; }
 
     String name() const {
-        // TODO: Support long names
-        // TODO: Make lazy
         return String{};
     }
 
@@ -349,13 +354,13 @@ public:
     :   path_(path) {
     }
 
-//    LPCSTR path_to_host() const {
-//        return PathImplUnix::path_to_host(*this);
-//    }
-//
-//    static LPCSTR path_to_host(const PathImplWin32& path) {
-//        return path.path().c_str();
-//    }
+    const char* path_to_host() const {
+        return PathImplUnix::path_to_host(*this);
+    }
+
+    static const char* path_to_host(const PathImplUnix& path) {
+        return path.path().c_str();
+    }
 
     const String& path() const { return path_; }
 
@@ -364,10 +369,14 @@ public:
     }
 
     static const PathImplUnix& mkdir(const PathImplUnix& path) {
+        const auto res = ::mkdir(path_to_host(path), 0777);
         return path;
     }
 
     static const PathImplUnix& mkdir_if_not_exists(const PathImplUnix& path) {
+        if (!path.exists()) {
+            path.mkdir();
+        }
         return path;
     }
 
@@ -399,7 +408,9 @@ public:
     }
 
     static bool exists(const PathImplUnix& path) {
-        return false;
+        struct stat st;
+        const auto res = ::stat(path.path_to_host(), &st);
+        return res == 0;
     }
 
     String path_dirname(const String& filename) {
@@ -435,11 +446,9 @@ public:
     }
 
     ~FileIterImplUnix() {
-
     }
 
     FileIterImplUnix(const String& path) {
-
     }
 
     bool operator == (const FileIterImplUnix& other) const {
@@ -459,7 +468,6 @@ public:
     }
 
 private:
-    //HANDLE handle_;
     bool end_ = false;
     FileInfoImplUnix find_data_;
 };
@@ -468,16 +476,16 @@ typedef FileInfoImplUnix FileInfo;
 typedef FileIterImplUnix FileIter;
 
 PathImplUnix get_tmp_path() {
-    char tmp_path[260];
+    char tmp_path[260] = "/var/tmp";
     return PathImplUnix{tmp_path};
 }
 
 PathImplUnix generate_tmp_filename(const PathImplUnix& path, const String& file_prefix) {
-    char tmp_path[260];
-    return PathImplUnix{tmp_path};
+    String filename = file_prefix + "XXXXXX";
+    return mktemp(const_cast<char*>(&filename.front()));
 }
 
-#endif
+#endif // #if CREFILE_PLATFORM == CREFILE_PLATFORM_DARWIN
 
 void path_join_append_one(String& to, const Path& append) {
     if (!to.empty() && !is_slash(to[to.size() - 1])) {
@@ -491,7 +499,7 @@ public:
     typedef FileIter const_iterator;
 
     IterPath(const String& path)
-    :   path_(path) {
+    :   path_{path} {
     }
 
     const String& path() const { return path_;  }

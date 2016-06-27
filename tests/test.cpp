@@ -25,14 +25,14 @@ TEST(file_op, op0) {
     std::ostringstream out_dir;
     out_dir << "runtests";
 
-    auto runtests = crefile::Path{crefile::join(crefile::get_tmp_path(), out_dir.str())}.mkdir_if_not_exists();
-    ASSERT_TRUE(runtests.exists());
+    auto runtests_dir = crefile::Path{crefile::join(crefile::get_tmp_path(), out_dir.str())};
+    runtests_dir.mkdir_if_not_exists();
+    ASSERT_TRUE(runtests_dir.exists());
 
-    auto runtests_a_b = crefile::Path{crefile::join(runtests, "a", "b")}.mkdir_parents();
+    auto runtests_a_b = crefile::Path{crefile::join(runtests_dir, "a", "b")}.mkdir_parents();
     ASSERT_TRUE(runtests_a_b.exists());
 
     auto file = crefile::generate_tmp_filename(runtests_a_b, "crefile_test_");
-    int p = 0;
 }
 
 TEST(list, dir0) {
@@ -41,9 +41,9 @@ TEST(list, dir0) {
         std::cout << file.name() << std::endl;
     }
 #else
-    for (auto file : crefile::iter_dir("/usr")) {
-        //std::cout << file.name() << std::endl;
-    }
+    //for (auto file : crefile::iter_dir("/usr")) {
+    //    std::cout << file.name() << std::endl;
+    //}
 #endif
 }
 
