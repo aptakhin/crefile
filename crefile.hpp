@@ -12,15 +12,16 @@
 #endif
 
 #ifdef __APPLE__
-#   define CREFILE_PLATFORM CREFILE_PLATFORM_DARWIN
+#   define CREFILE_PLATFORM CREFILE_PLATFORM_UNIX
 #endif
 
 #ifndef CREFILE_PLATFORM
 #   error "Can't detect current platform for crefile!"
 #endif
 
-#if CREFILE_PLATFORM == CREFILE_PLATFORM_DARWIN
-//#   include <unistd.h>
+#if CREFILE_PLATFORM == CREFILE_PLATFORM_UNIX
+#   include <sys/types.h>
+#   include <dirent.h>
 #   include <sys/stat.h>
 #endif
 
@@ -38,7 +39,6 @@ class NotImplementedException : public std::exception {};
 static bool is_slash(const char c) {
     return c == '/' || c == '\\';
 }
-
 
 #if CREFILE_PLATFORM == CREFILE_PLATFORM_WIN32
 const char DefaultSeparator = '\\';
@@ -326,20 +326,48 @@ PathImplWin32 generate_tmp_filename(const PathImplWin32& path, const String& fil
 
 #endif // #if CREFILE_PLATFORM == CREFILE_PLATFORM_WIN32
 
-#if CREFILE_PLATFORM == CREFILE_PLATFORM_DARWIN
+#if CREFILE_PLATFORM == CREFILE_PLATFORM_UNIX
+
+//template <typename Exc>
+//void winerror(int error_code, String&& win_error, const char* file, int line) {
+//    if (error_code != 0) {
+//        std::ostringstream err;
+//        err << win_error << " (win error: " << error_code << ", str: " << translate_error_code2string(error_code) << ") at file " << file << ":" << line;
+//        throw Exc(err.str());
+//    }
+//}
+//
+//#define UNIXERROR(ret_code, exc, win_error) { winerror<exc>(GetLastError(), (win_error), __FILE__, __LINE__); }
+//
+//#define UNIXCHECK(ret_code, exc, win_error) { if (!(ret_code)) { winerror<exc>(GetLastError(), (win_error), __FILE__, __LINE__); } }
+//
+
 
 class FileInfoImplUnix {
 public:
+    FileInfoImplUnix() {
 
-    void* native_ptr() { return &find_data_; }
-    const void* native_ptr() const { return &find_data_; }
-
-    String name() const {
-        return String{};
     }
 
+    FileInfoImplUnix(dirent* entry)
+    :   entry_(entry) {
+
+    }
+
+    dirent* native_ptr_impl() { return entry_; }
+    const dirent* native_ptr_impl() const { return entry_; }
+
+    String name() const {
+        return String{entry_->d_name};
+    }
+
+    bool is_end() const {
+        return entry_ == nullptr;
+    }
+
+
 private:
-    void* find_data_;
+    struct dirent* entry_ = nullptr;
 };
 
 class PathImplUnix{
@@ -446,13 +474,17 @@ public:
     }
 
     ~FileIterImplUnix() {
+        if (dir_) {
+            closedir(dir_);
+        }
     }
 
     FileIterImplUnix(const String& path) {
+        dir_ = ::opendir(path.c_str());
     }
 
     bool operator == (const FileIterImplUnix& other) const {
-        return end_ && other.end_;
+        return dir_entry_.is_end() && other.dir_entry_.is_end();
     }
 
     bool operator != (const FileIterImplUnix& other) const {
@@ -460,24 +492,26 @@ public:
     }
 
     FileIterImplUnix& operator ++() {
+        auto dir_entry = ::readdir(dir_);
+        dir_entry_ = FileInfoImplUnix{dir_entry};
         return *this;
     }
 
     FileInfoImplUnix operator *() const {
-        return find_data_;
+        return dir_entry_;
     }
 
 private:
-    bool end_ = false;
-    FileInfoImplUnix find_data_;
+    DIR* dir_ = nullptr;
+    FileInfoImplUnix dir_entry_;
 };
 
 typedef FileInfoImplUnix FileInfo;
 typedef FileIterImplUnix FileIter;
 
 PathImplUnix get_tmp_path() {
-    char tmp_path[260] = "/var/tmp";
-    return PathImplUnix{tmp_path};
+    static PathImplUnix tmp_path = getenv("TMPDIR");
+    return tmp_path;
 }
 
 PathImplUnix generate_tmp_filename(const PathImplUnix& path, const String& file_prefix) {
@@ -485,7 +519,10 @@ PathImplUnix generate_tmp_filename(const PathImplUnix& path, const String& file_
     return mktemp(const_cast<char*>(&filename.front()));
 }
 
-#endif // #if CREFILE_PLATFORM == CREFILE_PLATFORM_DARWIN
+#undef UNIXERROR
+#undef UNIXCHECK
+
+#endif // #if CREFILE_PLATFORM == CREFILE_PLATFORM_UNIX
 
 void path_join_append_one(String& to, const Path& append) {
     if (!to.empty() && !is_slash(to[to.size() - 1])) {
@@ -519,6 +556,5 @@ IterPath::const_iterator begin(const IterPath& path) {
 IterPath::const_iterator end(const IterPath& path) {
     return IterPath::const_iterator{};
 }
-
 
 } // namespace repath {

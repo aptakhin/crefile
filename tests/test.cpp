@@ -41,14 +41,17 @@ TEST(list, dir0) {
         std::cout << file.name() << std::endl;
     }
 #else
-    //for (auto file : crefile::iter_dir("/usr")) {
-    //    std::cout << file.name() << std::endl;
-    //}
+    for (auto file : crefile::iter_dir("/var/tmp")) {
+        std::cout << file.name() << std::endl;
+    }
 #endif
 }
+
+#include <dirent.h>
 
 int main(int argc, char* argv[]) {
     ::testing::InitGoogleTest(&argc, argv);
     int result = RUN_ALL_TESTS();
+
     return result;
 }
