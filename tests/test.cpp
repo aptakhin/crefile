@@ -1,11 +1,16 @@
 #include <crefile.hpp>
 #include <gtest/gtest.h>
+#include <iostream>
+
+crefile::Path TestsDir;
 
 TEST(common, path_join) {
 #if CREFILE_PLATFORM == CREFILE_PLATFORM_WIN32
     ASSERT_EQ("a\\b\\c", crefile::join("a", "b", "c"));
+    ASSERT_EQ(crefile::Path{"a\\b\\c"}, crefile::Path("a", "b", "c"));
 #else
     ASSERT_EQ("a/b/c", crefile::join("a", "b", "c"));
+    ASSERT_EQ(crefile::Path{"a/b/c"}, crefile::join("a", "b", "c"));
 #endif
 }
 
@@ -21,37 +26,48 @@ TEST(common, path_join2) {
     ASSERT_EQ("C:/Documents", crefile::join("C:/", "Documents"));
 }
 
-TEST(file_op, op0) {
-    std::ostringstream out_dir;
-    out_dir << "runtests";
-
-    auto runtests_dir = crefile::Path{crefile::join(crefile::get_tmp_path(), out_dir.str())};
+TEST(dir, children) {
+    const auto runtests_dir = crefile::Path{TestsDir, "runtests"};
     runtests_dir.mkdir_if_not_exists();
     ASSERT_TRUE(runtests_dir.exists());
 
-    auto runtests_a_b = crefile::Path{crefile::join(runtests_dir, "a", "b")}.mkdir_parents();
+    auto runtests_a_b = crefile::Path{runtests_dir, "a", "b"}.mkdir_parents();
     ASSERT_TRUE(runtests_a_b.exists());
 
-    auto file = crefile::generate_tmp_filename(runtests_a_b, "crefile_test_");
+//    auto file = crefile::generate_tmp_filename(runtests_a_b, "crefile_test_");
+//    std::cout << "Fname: " << file.path() << std::endl;
 }
 
-TEST(list, dir0) {
-#if CREFILE_PLATFORM == CREFILE_PLATFORM_WIN32
-    for (auto file : crefile::iter_dir("C:\\Users\\Alex\\Assembling\\crefile\\tests\\*")) {
-        std::cout << file.name() << std::endl;
+TEST(dir, not_exists) {
+    const auto dir = crefile::Path{TestsDir, "unexist"};
+    try {
+        crefile::Path{dir, "a"}.mkdir();
     }
-#else
-    for (auto file : crefile::iter_dir("/var/tmp")) {
-        std::cout << file.name() << std::endl;
-    }
-#endif
+    catch (crefile::NoSuchFileException& e) { /* ok */ }
 }
 
-#include <dirent.h>
+TEST(dir, no_permissions) {
+    try {
+        crefile::Path{"/nope"}.mkdir();
+    }
+    catch (crefile::NoSuchFileException& e) { /* ok */ }
+}
+
+TEST(iter_dir, dir0) {
+    const auto dir = crefile::Path{TestsDir, "iter_dir"};
+    crefile::Path{dir, "a"}.mkdir_parents();
+    std::vector<std::string> filenames;
+    for (auto file : crefile::iter_dir(dir)) {
+        filenames.push_back(file.name());
+    }
+    ASSERT_EQ(std::vector<std::string>{"a"}, filenames);
+}
 
 int main(int argc, char* argv[]) {
     ::testing::InitGoogleTest(&argc, argv);
+    TestsDir = crefile::Path{crefile::get_tmp_path(), "crefile_tests"};
+    TestsDir.rmrf();
+    std::cout << "Tests dir: " << TestsDir.path() << std::endl;
     int result = RUN_ALL_TESTS();
-
     return result;
 }

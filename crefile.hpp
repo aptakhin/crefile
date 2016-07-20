@@ -2,6 +2,7 @@
 #include <string>
 #include <vector>
 #include <sstream>
+#include <iostream>
 
 #define CREFILE_PLATFORM_DARWIN 8
 #define CREFILE_PLATFORM_UNIX 16
@@ -12,14 +13,18 @@
 #endif
 
 #ifdef __APPLE__
-#   define CREFILE_PLATFORM CREFILE_PLATFORM_UNIX
+#   define CREFILE_PLATFORM CREFILE_PLATFORM_DARWIN
 #endif
 
 #ifndef CREFILE_PLATFORM
 #   error "Can't detect current platform for crefile!"
 #endif
 
-#if CREFILE_PLATFORM == CREFILE_PLATFORM_UNIX
+#if CREFILE_PLATFORM == CREFILE_PLATFORM_DARWIN
+#   include <CoreServices/CoreServices.h>
+#endif
+
+#if CREFILE_PLATFORM == CREFILE_PLATFORM_UNIX || CREFILE_PLATFORM == CREFILE_PLATFORM_DARWIN
 #   include <sys/types.h>
 #   include <dirent.h>
 #   include <sys/stat.h>
@@ -35,6 +40,9 @@ namespace crefile {
 typedef std::string String;
 
 class NotImplementedException : public std::exception {};
+class FileExistsException : public std::exception {};
+class NoSuchFileException : public std::exception {};
+class UnknownErrorException : public std::exception {};
 
 static bool is_slash(const char c) {
     return c == '/' || c == '\\';
@@ -326,7 +334,7 @@ PathImplWin32 generate_tmp_filename(const PathImplWin32& path, const String& fil
 
 #endif // #if CREFILE_PLATFORM == CREFILE_PLATFORM_WIN32
 
-#if CREFILE_PLATFORM == CREFILE_PLATFORM_UNIX
+#if CREFILE_PLATFORM == CREFILE_PLATFORM_UNIX || CREFILE_PLATFORM == CREFILE_PLATFORM_DARWIN
 
 //template <typename Exc>
 //void winerror(int error_code, String&& win_error, const char* file, int line) {
@@ -337,9 +345,9 @@ PathImplWin32 generate_tmp_filename(const PathImplWin32& path, const String& fil
 //    }
 //}
 //
-//#define UNIXERROR(ret_code, exc, win_error) { winerror<exc>(GetLastError(), (win_error), __FILE__, __LINE__); }
+//#define CREFILE_UNIXERROR(ret_code, exc, win_error) { winerror<exc>(GetLastError(), (win_error), __FILE__, __LINE__); }
 //
-//#define UNIXCHECK(ret_code, exc, win_error) { if (!(ret_code)) { winerror<exc>(GetLastError(), (win_error), __FILE__, __LINE__); } }
+//#define CREFILE_UNIXCHECK(ret_code, exc, win_error) { if (!(ret_code)) { winerror<exc>(GetLastError(), (win_error), __FILE__, __LINE__); } }
 //
 
 
@@ -351,14 +359,17 @@ public:
 
     FileInfoImplUnix(dirent* entry)
     :   entry_(entry) {
-
     }
 
     dirent* native_ptr_impl() { return entry_; }
     const dirent* native_ptr_impl() const { return entry_; }
 
     String name() const {
-        return String{entry_->d_name};
+        if (is_end()) {
+            return String{};
+        } else {
+            return String{entry_->d_name};
+        }
     }
 
     bool is_end() const {
@@ -374,12 +385,17 @@ class PathImplUnix{
 public:
     PathImplUnix() {}
 
-    PathImplUnix(const String& path)
+    PathImplUnix(String path)
     :   path_(path) {
     }
 
     PathImplUnix(const char* path)
     :   path_(path) {
+    }
+
+    template<typename ... Types>
+    PathImplUnix(Types... args)
+    :   path_(join(args...)) {
     }
 
     const char* path_to_host() const {
@@ -398,6 +414,15 @@ public:
 
     static const PathImplUnix& mkdir(const PathImplUnix& path) {
         const auto res = ::mkdir(path_to_host(path), 0777);
+        if (res != 0) {
+            const auto error = errno;
+            switch (error) {
+            case ENOENT:
+                throw NoSuchFileException{};
+            default:
+                throw UnknownErrorException{};
+            }
+        }
         return path;
     }
 
@@ -414,17 +439,32 @@ public:
 
     static const PathImplUnix& mkdir_parents(const PathImplUnix& path) {
         PathImplUnix cur_path;
-        for (auto dir : path.split()) {
+        for (const auto& dir : path.split()) {
             cur_path = join(cur_path, dir);
-            if (!cur_path.exists()) {
-                cur_path.mkdir();
-            }
+            cur_path.mkdir_if_not_exists();
         }
         return path;
     }
 
     const PathImplUnix& mkdir_parents() const {
         return PathImplUnix::mkdir_parents(*this);
+    }
+
+    static const PathImplUnix& rm(const PathImplUnix& path) {
+        const auto res = ::remove(path.path_to_host());
+        return path;
+    }
+
+    const PathImplUnix& rm() const {
+        return PathImplUnix::rm(*this);
+    }
+
+    static const PathImplUnix& rmrf(const PathImplUnix& path) {
+        throw NotImplementedException();
+    }
+
+    const PathImplUnix& rmrf() const {
+        return PathImplUnix::rmrf(*this);
     }
 
     std::vector<String> split() const {
@@ -455,7 +495,7 @@ public:
     String path_extension(const String& filename) {
         const auto last_dot = filename.find_last_of('.');
         if (last_dot == String::npos) {
-            return "";
+            return String{};
         } else {
             return filename.substr(last_dot + 1);
         }
@@ -464,7 +504,6 @@ public:
 private:
     String path_;
 };
-
 
 typedef PathImplUnix Path;
 
@@ -481,6 +520,11 @@ public:
 
     FileIterImplUnix(const String& path) {
         dir_ = ::opendir(path.c_str());
+        do {
+            auto dir_entry = ::readdir(dir_);
+            dir_entry_ = FileInfoImplUnix{dir_entry};
+        }
+        while (dir_entry_.name() == "." || dir_entry_.name() == "..");
     }
 
     bool operator == (const FileIterImplUnix& other) const {
@@ -493,6 +537,9 @@ public:
 
     FileIterImplUnix& operator ++() {
         auto dir_entry = ::readdir(dir_);
+        if (dir_entry) {
+            std::cout << "N: " << dir_entry->d_name << std::endl;
+        }
         dir_entry_ = FileInfoImplUnix{dir_entry};
         return *this;
     }
@@ -514,15 +561,25 @@ PathImplUnix get_tmp_path() {
     return tmp_path;
 }
 
-PathImplUnix generate_tmp_filename(const PathImplUnix& path, const String& file_prefix) {
-    String filename = file_prefix + "XXXXXX";
-    return mktemp(const_cast<char*>(&filename.front()));
-}
+//PathImplUnix generate_tmp_filename(const PathImplUnix& path, const String& file_prefix) {
+//    String filename = file_prefix + "XXXXXX";
+//    //DO mkstemp
+//    //return path / mktemp(const_cast<char*>(&filename.front()));
+//}
 
-#undef UNIXERROR
-#undef UNIXCHECK
+#undef CREFILE_UNIXERROR
+#undef CREFILE_UNIXCHECK
 
 #endif // #if CREFILE_PLATFORM == CREFILE_PLATFORM_UNIX
+
+
+bool operator == (const Path& path_a, const char* path_b) {
+    return path_a.path() == path_b;
+}
+
+bool operator == (const Path& path_a, const String& path_b) {
+    return path_a.path() == path_b;
+}
 
 void path_join_append_one(String& to, const Path& append) {
     if (!to.empty() && !is_slash(to[to.size() - 1])) {
@@ -531,21 +588,29 @@ void path_join_append_one(String& to, const Path& append) {
     to += append.path();
 }
 
+Path operator / (const Path& to, const char* add) {
+    return Path{to, add};
+}
+
+Path operator / (const Path& to, const String& add) {
+    return Path{to, add};
+}
+
 class IterPath {
 public:
     typedef FileIter const_iterator;
 
-    IterPath(const String& path)
+    IterPath(Path path)
     :   path_{path} {
     }
 
-    const String& path() const { return path_;  }
+    const String& path() const { return path_.path();  }
 
 private:
-    String path_;
+    Path path_;
 };
 
-static const IterPath iter_dir(const String& path) {
+static const IterPath iter_dir(const Path& path) {
     return IterPath{path};
 }
 
@@ -557,4 +622,4 @@ IterPath::const_iterator end(const IterPath& path) {
     return IterPath::const_iterator{};
 }
 
-} // namespace repath {
+} // namespace crefile {
