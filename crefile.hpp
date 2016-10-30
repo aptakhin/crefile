@@ -28,6 +28,7 @@
 #   include <sys/types.h>
 #   include <dirent.h>
 #   include <sys/stat.h>
+#   include <unistd.h>
 #endif
 
 #if CREFILE_PLATFORM == CREFILE_PLATFORM_WIN32
@@ -39,10 +40,52 @@ namespace crefile {
 
 typedef std::string String;
 
-class NotImplementedException : public std::exception {};
-class FileExistsException : public std::exception {};
-class NoSuchFileException : public std::exception {};
-class UnknownErrorException : public std::exception {};
+#if CREFILE_PLATFORM == CREFILE_PLATFORM_WIN32
+    using ErrorCode = DWORD;
+#else
+    using ErrorCode = int;
+#endif
+
+class BaseException {
+public:
+    virtual ~BaseException() {}
+};
+
+class Exception : public BaseException, public std::exception {
+public:
+    Exception(ErrorCode code) : code_(code) {}
+
+private:
+    ErrorCode code_;
+};
+
+class RuntimeError : public BaseException, public std::runtime_error {
+public:
+    RuntimeError() : std::runtime_error("") {}
+    RuntimeError(const char* message) : std::runtime_error(message) {}
+};
+
+
+#define CREFILE_EXCEPTION_BASE(name) \
+    public:\
+        name(ErrorCode code) : Exception(code) {}
+
+class NotImplementedException : public RuntimeError {};
+
+class FileExistsException : public Exception {
+    CREFILE_EXCEPTION_BASE(FileExistsException);
+};
+class NoSuchFileException : public Exception {
+    CREFILE_EXCEPTION_BASE(NoSuchFileException);
+};
+class NoPermissionException : public Exception {
+    CREFILE_EXCEPTION_BASE(NoPermissionException);
+};
+class UnknownErrorException : public Exception  {
+    CREFILE_EXCEPTION_BASE(UnknownErrorException);
+};
+
+#undef CREFILE_EXCEPTION_BASE
 
 static bool is_slash(const char c) {
     return c == '/' || c == '\\';
@@ -381,6 +424,76 @@ private:
     struct dirent* entry_ = nullptr;
 };
 
+void check_error(ErrorCode code) {
+    if (code != 0) {
+        const auto error = errno;
+        switch (error) {
+            case EPERM:
+                throw NoPermissionException{error};
+            case ENOENT:
+                throw NoSuchFileException{error};
+            default:
+                throw UnknownErrorException{error};
+        }
+    }
+}
+
+class FileIterImplUnix {
+public:
+    FileIterImplUnix() {
+    }
+
+    ~FileIterImplUnix() {
+        if (dir_) {
+            closedir(dir_);
+        }
+    }
+
+    FileIterImplUnix(const String& path) {
+        dir_ = ::opendir(path.c_str());
+        do {
+            auto dir_entry = ::readdir(dir_);
+            dir_entry_ = FileInfoImplUnix{dir_entry};
+        }
+        while (dir_entry_.name() == "." || dir_entry_.name() == "..");
+    }
+
+    bool is_end() const {
+        if (!dir_) {
+            throw RuntimeError("Called is_end for non-initialized iterator");
+        }
+        return dir_entry_.is_end();
+    }
+
+    bool operator == (const FileIterImplUnix& other) const {
+        return dir_entry_.is_end() && other.dir_entry_.is_end();
+    }
+
+    bool operator != (const FileIterImplUnix& other) const {
+        return !(*this == other);
+    }
+
+    FileIterImplUnix& operator ++() {
+        if (!dir_) {
+            throw RuntimeError("Called next file for non-initialized iterator");
+        }
+        auto dir_entry = ::readdir(dir_);
+        dir_entry_ = FileInfoImplUnix{dir_entry};
+        return *this;
+    }
+
+    FileInfoImplUnix operator *() const {
+        return dir_entry_;
+    }
+
+private:
+    DIR* dir_ = nullptr;
+    FileInfoImplUnix dir_entry_;
+};
+
+typedef FileInfoImplUnix FileInfo;
+typedef FileIterImplUnix FileIter;
+
 class PathImplUnix{
 public:
     PathImplUnix() {}
@@ -414,15 +527,7 @@ public:
 
     static const PathImplUnix& mkdir(const PathImplUnix& path) {
         const auto res = ::mkdir(path_to_host(path), 0777);
-        if (res != 0) {
-            const auto error = errno;
-            switch (error) {
-            case ENOENT:
-                throw NoSuchFileException{};
-            default:
-                throw UnknownErrorException{};
-            }
-        }
+        check_error(res);
         return path;
     }
 
@@ -452,6 +557,7 @@ public:
 
     static const PathImplUnix& rm(const PathImplUnix& path) {
         const auto res = ::remove(path.path_to_host());
+        check_error(res);
         return path;
     }
 
@@ -461,10 +567,30 @@ public:
 
     static const PathImplUnix& rmrf(const PathImplUnix& path) {
         throw NotImplementedException();
+//        FileIterImplUnix iter{path.path()};
+//        while (!iter.is_end()) {
+//            if (iter.is_directory()) {
+//                iter.path.rmrf();
+//            } else {
+//                iter.path.rm();
+//            }
+//        }
+//        return path;
     }
 
     const PathImplUnix& rmrf() const {
         return PathImplUnix::rmrf(*this);
+    }
+
+    static const PathImplUnix& rmrf_if_exists(const PathImplUnix& path) {
+        if (path.exists()) {
+            return path.rmrf();
+        }
+        return path;
+    }
+
+    const PathImplUnix& rmrf_if_exists() const {
+        return PathImplUnix::rmrf_if_exists(*this);
     }
 
     std::vector<String> split() const {
@@ -506,55 +632,6 @@ private:
 };
 
 typedef PathImplUnix Path;
-
-class FileIterImplUnix {
-public:
-    FileIterImplUnix() {
-    }
-
-    ~FileIterImplUnix() {
-        if (dir_) {
-            closedir(dir_);
-        }
-    }
-
-    FileIterImplUnix(const String& path) {
-        dir_ = ::opendir(path.c_str());
-        do {
-            auto dir_entry = ::readdir(dir_);
-            dir_entry_ = FileInfoImplUnix{dir_entry};
-        }
-        while (dir_entry_.name() == "." || dir_entry_.name() == "..");
-    }
-
-    bool operator == (const FileIterImplUnix& other) const {
-        return dir_entry_.is_end() && other.dir_entry_.is_end();
-    }
-
-    bool operator != (const FileIterImplUnix& other) const {
-        return !(*this == other);
-    }
-
-    FileIterImplUnix& operator ++() {
-        auto dir_entry = ::readdir(dir_);
-        if (dir_entry) {
-            std::cout << "N: " << dir_entry->d_name << std::endl;
-        }
-        dir_entry_ = FileInfoImplUnix{dir_entry};
-        return *this;
-    }
-
-    FileInfoImplUnix operator *() const {
-        return dir_entry_;
-    }
-
-private:
-    DIR* dir_ = nullptr;
-    FileInfoImplUnix dir_entry_;
-};
-
-typedef FileInfoImplUnix FileInfo;
-typedef FileIterImplUnix FileIter;
 
 PathImplUnix get_tmp_path() {
     static PathImplUnix tmp_path = getenv("TMPDIR");
