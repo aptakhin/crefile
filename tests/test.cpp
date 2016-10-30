@@ -39,18 +39,12 @@ TEST(dir, children) {
 }
 
 TEST(dir, not_exists) {
-    const auto dir = crefile::Path{TestsDir, "unexist"};
-    try {
-        crefile::Path{dir, "a"}.mkdir();
-    }
-    catch (crefile::NoSuchFileException& e) { /* ok */ }
+    const auto dir = crefile::Path{TestsDir, "unexist", "a"};
+    ASSERT_THROW(dir.mkdir(), crefile::NoSuchFileException);
 }
 
 TEST(dir, no_permissions) {
-    try {
-        crefile::Path{"/nope"}.mkdir();
-    }
-    catch (crefile::NoSuchFileException& e) { /* ok */ }
+    ASSERT_THROW(crefile::Path{"/nope"}.mkdir(), crefile::NoPermissionException);
 }
 
 TEST(iter_dir, dir0) {
@@ -66,7 +60,7 @@ TEST(iter_dir, dir0) {
 int main(int argc, char* argv[]) {
     ::testing::InitGoogleTest(&argc, argv);
     TestsDir = crefile::Path{crefile::get_tmp_path(), "crefile_tests"};
-    TestsDir.rmrf();
+    TestsDir/*.rmrf_if_exists()*/.mkdir();
     std::cout << "Tests dir: " << TestsDir.path() << std::endl;
     int result = RUN_ALL_TESTS();
     return result;
