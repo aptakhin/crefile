@@ -61,7 +61,7 @@ private:
 
 class RuntimeError : public BaseException, public std::runtime_error {
 public:
-    RuntimeError() : std::runtime_error("") {}
+    RuntimeError() : std::runtime_error(String{}) {}
     RuntimeError(const char* message) : std::runtime_error(message) {}
 };
 
@@ -78,6 +78,9 @@ class FileExistsException : public Exception {
 class NoSuchFileException : public Exception {
     CREFILE_EXCEPTION_BASE(NoSuchFileException);
 };
+class NotDirectoryException : public Exception {
+    CREFILE_EXCEPTION_BASE(NotDirectoryException);
+};
 class NoPermissionException : public Exception {
     CREFILE_EXCEPTION_BASE(NoPermissionException);
 };
@@ -87,21 +90,27 @@ class UnknownErrorException : public Exception  {
 
 #undef CREFILE_EXCEPTION_BASE
 
+namespace priv {
+
 static bool is_slash(const char c) {
     return c == '/' || c == '\\';
 }
 
-#if CREFILE_PLATFORM == CREFILE_PLATFORM_WIN32
-const char DefaultSeparator = '\\';
-#else
-const char DefaultSeparator = '/';
-#endif
+class WinPolicy {
+public:
+    static const char Separator = '\\';
+};
+
+class PosixPolicy {
+public:
+    static const char Separator = '/';
+};
 
 std::vector<String> split_impl(const char* base, size_t size) {
     std::vector<String> res;
     size_t start_pos = 0;
     for (size_t i = 0; i < size; ++i) {
-        if (is_slash(base[i])) {
+        if (priv::is_slash(base[i])) {
             res.push_back(String{base + start_pos, base + i + 1});
             start_pos = i + 1;
         }
@@ -114,39 +123,215 @@ std::vector<String> split_impl(const char* base, size_t size) {
     return res;
 }
 
+} // namespace priv {
+
+String dirname(const String& filename) {
+    auto last_slash = filename.find_last_of('/');
+    if (last_slash == String::npos) {
+        last_slash = filename.find_last_of("\\\\");
+        if (last_slash == String::npos) {
+            return filename;
+        }
+    }
+    return filename.substr(0, last_slash);
+}
+
+String extension(const String& filename) {
+    const auto last_dot = filename.find_last_of('.');
+    if (last_dot == String::npos) {
+        return String{};
+    } else {
+        return filename.substr(last_dot + 1);
+    }
+}
+
 std::vector<String> split(const String& path) {
-    return split_impl(path.c_str(), path.size());
+    return priv::split_impl(path.c_str(), path.size());
 }
 
 std::vector<String> split(const char* base, size_t size) {
-    return split_impl(base, strlen(base));
+    return priv::split_impl(base, size);
 }
 
-template<typename Append>
-void path_join_append_one(String& to, Append append) {
-    if (!to.empty() && !is_slash(to[to.size() - 1])) {
-        to += DefaultSeparator;
+class PosixPath {
+private:
+    using Policy = priv::PosixPolicy;
+    static void path_join_append_one(String& to, const char* append) {
+        if (!to.empty() && !priv::is_slash(to[to.size() - 1])) {
+            to += Policy::Separator;
+        }
+        to += append;
     }
-    to += append;
+
+    static void path_join_append_one(String& to, const PosixPath& append) {
+        if (!to.empty() && !priv::is_slash(to[to.size() - 1])) {
+            to += Policy::Separator;
+        }
+        to += append.str();
+    }
+
+    template<typename First>
+    static void path_join_impl(String& buf, First first) {
+        path_join_append_one(buf, first);
+    }
+
+    template<typename First, typename... Types>
+    static void path_join_impl(String& buf, First first, Types... tail) {
+        path_join_append_one(buf, first);
+        path_join_impl(buf, tail...);
+    }
+public:
+    PosixPath() {}
+    PosixPath(const char* path) : path_(path) {}
+    PosixPath(String path) : path_(std::move(path)) {}
+
+    template<typename ... Types>
+    PosixPath(Types... args) {
+        path_join_impl(path_, args...);
+    }
+
+    const String& str() const { return path_; }
+    const char* c_str() const { return path_.c_str(); }
+
+    template<typename ... Types>
+    static PosixPath join(Types... args) {
+        String buf;
+        path_join_impl(buf, args...);
+        return PosixPath{buf};
+    }
+
+    String dirname() const {
+        return crefile::dirname(path_);
+    }
+
+    String extension() const {
+        return crefile::extension(path_);
+    }
+
+    std::vector<String> split() const {
+        return crefile::split(path_);
+    }
+
+    bool is_abspath() const {
+        return PosixPath::is_abspath(path_);
+    }
+
+    static bool is_abspath(const String& path) {
+        if (path.empty()) {
+            return false;
+        }
+        return path[0] == Policy::Separator;
+    }
+
+private:
+    String path_;
+};
+
+bool operator == (const PosixPath& a, const PosixPath& b) {
+    return a.str() == b.str();
 }
 
-template<typename First>
-void path_join_impl(String& buf, First first) {
-    path_join_append_one(buf, first);
+bool operator != (const PosixPath& a, const PosixPath& b) {
+    return a.str() != b.str();
 }
 
-template<typename First, typename... Types>
-void path_join_impl(String& buf, First first, Types... tail) {
-    path_join_append_one(buf, first);
-    path_join_impl(buf, tail...);
+bool operator < (const PosixPath& a, const PosixPath& b) {
+    return a.str() < b.str();
 }
 
-template<typename ... Types>
-String join(Types... args) {
-    String buf;
-    path_join_impl(buf, args...);
-    return buf;
+class WinPath {
+private:
+    using Policy = priv::WinPolicy;
+
+    static void path_join_append_one(String& to, const char* append) {
+        if (!to.empty() && !priv::is_slash(to.back())) {
+            to += Policy::Separator;
+        }
+        to += append;
+    }
+
+    static void path_join_append_one(String& to, const WinPath& append) {
+        if (!to.empty() && !priv::is_slash(to.back())) {
+            to += Policy::Separator;
+        }
+        to += append.str();
+    }
+
+    template<typename First>
+    static void path_join_impl(String& buf, First first) {
+        path_join_append_one(buf, first);
+    }
+
+    template<typename First, typename... Types>
+    static void path_join_impl(String& buf, First first, Types... tail) {
+        path_join_append_one(buf, first);
+        path_join_impl(buf, tail...);
+    }
+public:
+    WinPath() {}
+    WinPath(const char* path) : path_(path) {}
+    WinPath(String path) : path_(std::move(path)) {}
+
+    template<typename ... Types>
+    WinPath(Types... args) {
+        path_join_impl(path_, args...);
+    }
+
+    const String& str() const { return path_; }
+    const char* c_str() const { return path_.c_str(); }
+
+    template<typename ... Types>
+    static WinPath join(Types... args) {
+        String buf;
+        path_join_impl(buf, args...);
+        return WinPath{buf};
+    }
+
+    String dirname() const {
+        return crefile::dirname(path_);
+    }
+
+    String extension() const {
+        return crefile::extension(path_);
+    }
+
+    std::vector<String> split() const {
+        return crefile::split(path_);
+    }
+
+    bool is_abspath() const {
+        return WinPath::is_abspath(path_);
+    }
+
+    static bool is_abspath(const String& path) {
+        if (path.size() < 3) {
+            return false;
+        }
+        return path[1] == ':' && priv::is_slash(path[2]);
+    }
+
+private:
+    String path_;
+};
+
+bool operator == (const WinPath& a, const WinPath& b) {
+    return a.str() == b.str();
 }
+
+bool operator != (const WinPath& a, const WinPath& b) {
+    return a.str() != b.str();
+}
+
+bool operator < (const WinPath& a, const WinPath& b) {
+    return a.str() < b.str();
+}
+
+//#if CREFILE_PLATFORM == CREFILE_PLATFORM_WIN32
+//const char DefaultSeparator = '\\';
+//#else
+//const char DefaultSeparator = '/';
+//#endif
+
 
 #if CREFILE_PLATFORM == CREFILE_PLATFORM_WIN32
 
@@ -166,6 +351,7 @@ private:
     WIN32_FIND_DATA find_data_;
 };
 
+namespace priv {
 String translate_error_code2string(DWORD win_error_code) {
     if (win_error_code == 0)
         return String{};
@@ -177,6 +363,7 @@ String translate_error_code2string(DWORD win_error_code) {
     return message;
 }
 
+
 template <typename Exc>
 void winerror(int error_code, String&& win_error, const char* file, int line) {
     if (error_code != 0) {
@@ -186,13 +373,17 @@ void winerror(int error_code, String&& win_error, const char* file, int line) {
     }
 }
 
-#define WINERROR(ret_code, exc, win_error) { winerror<exc>(GetLastError(), (win_error), __FILE__, __LINE__); }
+}; // namespace priv {
 
-#define WINCHECK(ret_code, exc, win_error) { if (!(ret_code)) { winerror<exc>(GetLastError(), (win_error), __FILE__, __LINE__); } }
+#define WINERROR(ret_code, exc, win_error) { priv::winerror<exc>(GetLastError(), (win_error), __FILE__, __LINE__); }
+
+#define WINCHECK(ret_code, exc, win_error) { if (!(ret_code)) { priv::winerror<exc>(GetLastError(), (win_error), __FILE__, __LINE__); } }
 
 
-class PathImplWin32 {
+class PathImplWin32 : public WinPath {
 public:
+    using Self = PathImplWin32;
+
     PathImplWin32() {}
 
     PathImplWin32(const String& path)
@@ -203,15 +394,9 @@ public:
     :   path_{path} {
     }
 
-    LPCSTR path_to_host() const {
-        return PathImplWin32::path_to_host(*this);
+    PathImplWin32 abspath() const {
+        return Self{Self::cwd(), path_};
     }
-
-    static LPCSTR path_to_host(const PathImplWin32& path) {
-        return path.path().c_str();
-    }
-
-    const String& path() const { return path_; }
 
     const PathImplWin32& mkdir() const {
         return PathImplWin32::mkdir(*this);
@@ -219,7 +404,7 @@ public:
 
     static const PathImplWin32& mkdir(const PathImplWin32& path) {
         WINCHECK(CreateDirectory(path_to_host(path), NULL),
-            std::runtime_error, "CreateDirectory failed");
+            RuntimeError, "CreateDirectory failed");
         return path;
     }
 
@@ -228,7 +413,7 @@ public:
         if (!res) {
             auto const error = GetLastError();
             if (error != 0 && error != ERROR_ALREADY_EXISTS) {
-                WINERROR(error, std::runtime_error, "CreateDirectory failed");
+                WINERROR(error, RuntimeError, "CreateDirectory failed");
             }
         }
         return path;
@@ -297,9 +482,6 @@ public:
             return filename.substr(last_dot + 1);
         }
     }
-
-private:
-    String path_;
 };
 
 
@@ -375,6 +557,9 @@ PathImplWin32 generate_tmp_filename(const PathImplWin32& path, const String& fil
     return PathImplWin32{tmp};
 }
 
+#undef WINCHECK
+#undef WINERROR
+
 #endif // #if CREFILE_PLATFORM == CREFILE_PLATFORM_WIN32
 
 #if CREFILE_PLATFORM == CREFILE_PLATFORM_UNIX || CREFILE_PLATFORM == CREFILE_PLATFORM_DARWIN
@@ -392,16 +577,64 @@ PathImplWin32 generate_tmp_filename(const PathImplWin32& path, const String& fil
 //
 //#define CREFILE_UNIXCHECK(ret_code, exc, win_error) { if (!(ret_code)) { winerror<exc>(GetLastError(), (win_error), __FILE__, __LINE__); } }
 //
-
+void check_error(ErrorCode code) {
+    if (code != 0) {
+        const auto error = errno;
+        switch (error) {
+            case EPERM:
+            case EACCES:
+                throw NoPermissionException{error};
+            case ENOENT:
+                throw NoSuchFileException{error};
+            case EEXIST:
+                throw FileExistsException{error};
+            case ENOTDIR:
+                throw NotDirectoryException{error};
+            default:
+                throw UnknownErrorException{error};
+        }
+    }
+}
 
 class FileInfoImplUnix {
+private:
+    void valid() const {
+        if (is_end()) {
+            throw RuntimeError("Can't get info from invalid file!");
+        }
+    }
+
+    struct stat* get_stat() const {
+        valid();
+        if (!stat_) {
+            //stat_.reset(new struct stat);
+            stat_ = new struct stat;
+            const auto path = PosixPath(from_dir_, entry_->d_name);
+            const auto res = lstat(path.c_str(), stat_);
+            check_error(res);
+        }
+        return stat_;
+    }
+
 public:
     FileInfoImplUnix() {
 
     }
 
-    FileInfoImplUnix(dirent* entry)
-    :   entry_(entry) {
+    ~FileInfoImplUnix() {
+        delete stat_;
+    }
+
+
+//    FileInfoImplUnix(FileInfoImplUnix from)
+//    :   entry_(std::move(from.entry_)),
+//        stat_(std::move(from.stat_)) {
+//
+//    }
+
+    FileInfoImplUnix(dirent* entry, PosixPath from_dir)
+    :   entry_(entry),
+        from_dir_(from_dir) {
     }
 
     dirent* native_ptr_impl() { return entry_; }
@@ -415,30 +648,25 @@ public:
         }
     }
 
+    bool is_directory() const {
+        struct stat* st = get_stat();
+        return S_ISDIR(stat_->st_mode);
+    }
+
     bool is_end() const {
         return entry_ == nullptr;
     }
 
-
 private:
     struct dirent* entry_ = nullptr;
+    //mutable std::unique_ptr<struct stat> stat_;
+    mutable struct stat* stat_ = nullptr;
+
+    PosixPath from_dir_;
 };
 
-void check_error(ErrorCode code) {
-    if (code != 0) {
-        const auto error = errno;
-        switch (error) {
-            case EPERM:
-                throw NoPermissionException{error};
-            case ENOENT:
-                throw NoSuchFileException{error};
-            default:
-                throw UnknownErrorException{error};
-        }
-    }
-}
-
 class FileIterImplUnix {
+
 public:
     FileIterImplUnix() {
     }
@@ -449,20 +677,46 @@ public:
         }
     }
 
-    FileIterImplUnix(const String& path) {
-        dir_ = ::opendir(path.c_str());
+    FileIterImplUnix(const char* path)
+        : dir_path_(path) {
+        dir_ = ::opendir(path);
         do {
             auto dir_entry = ::readdir(dir_);
-            dir_entry_ = FileInfoImplUnix{dir_entry};
+            dir_entry_ = FileInfoImplUnix{dir_entry, dir_path_};
         }
         while (dir_entry_.name() == "." || dir_entry_.name() == "..");
     }
 
+    FileIterImplUnix(const String& path)
+        : FileIterImplUnix(path.c_str()) {
+
+    }
+
+    FileIterImplUnix(const PosixPath& path)
+        : FileIterImplUnix(path.c_str()) {
+
+    }
+
     bool is_end() const {
         if (!dir_) {
-            throw RuntimeError("Called is_end for non-initialized iterator");
+            throw RuntimeError("Called is_end() for non-initialized iterator");
         }
         return dir_entry_.is_end();
+    }
+
+    bool is_directory() const {
+        return dir_entry_.is_directory();
+    }
+
+    const PosixPath& dir_path() const {
+        return dir_path_;
+    }
+
+    PosixPath path() const {
+        if (!dir_) {
+            throw RuntimeError("Called path() for non-initialized iterator");
+        }
+        return PosixPath{dir_path_, dir_entry_.name()};
     }
 
     bool operator == (const FileIterImplUnix& other) const {
@@ -478,15 +732,16 @@ public:
             throw RuntimeError("Called next file for non-initialized iterator");
         }
         auto dir_entry = ::readdir(dir_);
-        dir_entry_ = FileInfoImplUnix{dir_entry};
+        dir_entry_ = FileInfoImplUnix{dir_entry, dir_path_};
         return *this;
     }
 
-    FileInfoImplUnix operator *() const {
+    const FileInfoImplUnix& operator *() const {
         return dir_entry_;
     }
 
 private:
+    PosixPath dir_path_;
     DIR* dir_ = nullptr;
     FileInfoImplUnix dir_entry_;
 };
@@ -494,35 +749,61 @@ private:
 typedef FileInfoImplUnix FileInfo;
 typedef FileIterImplUnix FileIter;
 
-class PathImplUnix{
+class PathImplUnix : public PosixPath {
 public:
-    PathImplUnix() {}
+    using Self = PathImplUnix;
+
+    PathImplUnix() = default;
 
     PathImplUnix(String path)
-    :   path_(path) {
+    :   PosixPath{path} {
+    }
+
+    PathImplUnix(PosixPath path)
+    :   PosixPath{std::move(path)} {
     }
 
     PathImplUnix(const char* path)
-    :   path_(path) {
+    :   PosixPath{path} {
     }
 
     template<typename ... Types>
     PathImplUnix(Types... args)
-    :   path_(join(args...)) {
+    :   PosixPath{args...} {
     }
 
     const char* path_to_host() const {
-        return PathImplUnix::path_to_host(*this);
+        return Self::path_to_host(*this);
     }
 
     static const char* path_to_host(const PathImplUnix& path) {
-        return path.path().c_str();
+        return path.c_str();
     }
 
-    const String& path() const { return path_; }
+    //const String& path() const { return path_; }
+
+    static PathImplUnix tmp_dir() {
+        static Self tmp_path = getenv("TMPDIR");
+        return tmp_path;
+    }
+
+    static const PathImplUnix cwd() {
+        char buf[2000]; // FIXME: Handle bigger size and error
+        const auto res = ::getcwd(buf, sizeof(buf));
+        //check_error(res);
+        return Self{res};
+    }
+
+    PathImplUnix abspath() const {
+        return Self::abspath(*this);
+    }
+
+    static PathImplUnix abspath(const PathImplUnix& path) {
+        return Self{cwd(), path};
+    }
 
     const PathImplUnix& mkdir() const {
-        return PathImplUnix::mkdir(*this);
+        return Self::mkdir(*this);
     }
 
     static const PathImplUnix& mkdir(const PathImplUnix& path) {
@@ -539,11 +820,11 @@ public:
     }
 
     const PathImplUnix& mkdir_if_not_exists() const {
-        return PathImplUnix::mkdir_if_not_exists(*this);
+        return Self::mkdir_if_not_exists(*this);
     }
 
     static const PathImplUnix& mkdir_parents(const PathImplUnix& path) {
-        PathImplUnix cur_path;
+        Self cur_path;
         for (const auto& dir : path.split()) {
             cur_path = join(cur_path, dir);
             cur_path.mkdir_if_not_exists();
@@ -552,7 +833,7 @@ public:
     }
 
     const PathImplUnix& mkdir_parents() const {
-        return PathImplUnix::mkdir_parents(*this);
+        return Self::mkdir_parents(*this);
     }
 
     static const PathImplUnix& rm(const PathImplUnix& path) {
@@ -562,24 +843,28 @@ public:
     }
 
     const PathImplUnix& rm() const {
-        return PathImplUnix::rm(*this);
+        return Self::rm(*this);
     }
 
     static const PathImplUnix& rmrf(const PathImplUnix& path) {
-        throw NotImplementedException();
-//        FileIterImplUnix iter{path.path()};
-//        while (!iter.is_end()) {
-//            if (iter.is_directory()) {
-//                iter.path.rmrf();
-//            } else {
-//                iter.path.rm();
-//            }
-//        }
-//        return path;
+        //throw NotImplementedException();
+        FileIterImplUnix iter{path.str()};
+        //std::cout << "Sca: " << path.str() << std::endl;
+        while (!iter.is_end()) {
+            if (iter.is_directory()) {
+                //std::cout << "  (D): " << iter.path().str() << std::endl;
+                Self{iter.path()}.rmrf();
+            } else {
+                //std::cout << "  (f): " << iter.path().str() << std::endl;
+                Self{iter.path()}.rm();
+            }
+            ++iter;
+        }
+        return path;
     }
 
     const PathImplUnix& rmrf() const {
-        return PathImplUnix::rmrf(*this);
+        return Self::rmrf(*this);
     }
 
     static const PathImplUnix& rmrf_if_exists(const PathImplUnix& path) {
@@ -590,15 +875,11 @@ public:
     }
 
     const PathImplUnix& rmrf_if_exists() const {
-        return PathImplUnix::rmrf_if_exists(*this);
-    }
-
-    std::vector<String> split() const {
-        return crefile::split(path_);
+        return Self::rmrf_if_exists(*this);
     }
 
     bool exists() const {
-        return PathImplUnix::exists(*this);
+        return Self::exists(*this);
     }
 
     static bool exists(const PathImplUnix& path) {
@@ -606,37 +887,13 @@ public:
         const auto res = ::stat(path.path_to_host(), &st);
         return res == 0;
     }
-
-    String path_dirname(const String& filename) {
-        auto last_slash = filename.find_last_of('/');
-        if (last_slash == String::npos) {
-            last_slash = filename.find_last_of("\\\\");
-            if (last_slash == String::npos) {
-                return filename;
-            }
-        }
-        return filename.substr(0, last_slash);
-    }
-
-    String path_extension(const String& filename) {
-        const auto last_dot = filename.find_last_of('.');
-        if (last_dot == String::npos) {
-            return String{};
-        } else {
-            return filename.substr(last_dot + 1);
-        }
-    }
-
-private:
-    String path_;
 };
 
-typedef PathImplUnix Path;
+//bool operator == (const PathImplUnix& a, const PathImplUnix& b) {
+//  a.path
+//}
 
-PathImplUnix get_tmp_path() {
-    static PathImplUnix tmp_path = getenv("TMPDIR");
-    return tmp_path;
-}
+typedef PathImplUnix Path;
 
 //PathImplUnix generate_tmp_filename(const PathImplUnix& path, const String& file_prefix) {
 //    String filename = file_prefix + "XXXXXX";
@@ -651,19 +908,19 @@ PathImplUnix get_tmp_path() {
 
 
 bool operator == (const Path& path_a, const char* path_b) {
-    return path_a.path() == path_b;
+    return path_a.str() == path_b;
 }
 
 bool operator == (const Path& path_a, const String& path_b) {
-    return path_a.path() == path_b;
+    return path_a.str() == path_b;
 }
 
-void path_join_append_one(String& to, const Path& append) {
-    if (!to.empty() && !is_slash(to[to.size() - 1])) {
-        to += DefaultSeparator;
-    }
-    to += append.path();
-}
+//void path_join_append_one(String& to, const Path& append) {
+//    if (!to.empty() && !is_slash(to[to.size() - 1])) {
+//        to += DefaultSeparator;
+//    }
+//    to += append.path();
+//}
 
 Path operator / (const Path& to, const char* add) {
     return Path{to, add};
@@ -681,7 +938,7 @@ public:
     :   path_{path} {
     }
 
-    const String& path() const { return path_.path();  }
+    const String& str() const { return path_.str();  }
 
 private:
     Path path_;
@@ -692,11 +949,38 @@ static const IterPath iter_dir(const Path& path) {
 }
 
 IterPath::const_iterator begin(const IterPath& path) {
-    return IterPath::const_iterator{path.path()};
+    return IterPath::const_iterator{path.str()};
 }
 
 IterPath::const_iterator end(const IterPath& path) {
     return IterPath::const_iterator{};
+}
+
+bool is_abspath(const String& path) {
+    return Path::is_abspath(path);
+}
+
+Path cwd() {
+    return Path::cwd();
+}
+
+Path cd(const Path& path) {
+    throw NotImplementedException();
+    // return Path::cd(path);
+}
+
+Path tmp_dir() {
+    return Path::tmp_dir();
+}
+
+Path user_dir() {
+    throw NotImplementedException();
+    // return Path::user_dir();
+}
+
+template<typename ... Types>
+String join(Types... args) {
+    return Path::join(args...).str();
 }
 
 } // namespace crefile {

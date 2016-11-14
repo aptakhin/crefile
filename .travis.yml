@@ -1,0 +1,3 @@
+language: cpp
+compiler: clang
+script: g++ crefile.hpp tests/test.cpp tests/gtest/gtest-all.cc -Wc++11-extensions -I ./ -I tests --std=c++11 && ./a.out
