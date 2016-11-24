@@ -12,6 +12,10 @@
 #   define CREFILE_PLATFORM CREFILE_PLATFORM_WIN32
 #endif
 
+#ifdef __unix__
+#   define CREFILE_PLATFORM CREFILE_PLATFORM_UNIX
+#endif
+
 #ifdef __APPLE__
 #   define CREFILE_PLATFORM CREFILE_PLATFORM_DARWIN
 #endif
@@ -666,6 +670,14 @@ private:
 };
 
 class FileIterImplUnix {
+private:
+    void next() {
+        do {
+            auto dir_entry = ::readdir(dir_);
+            dir_entry_ = FileInfoImplUnix{dir_entry, dir_path_};
+        }
+        while (dir_entry_.name() == "." || dir_entry_.name() == "..");
+    }
 
 public:
     FileIterImplUnix() {
@@ -680,11 +692,7 @@ public:
     FileIterImplUnix(const char* path)
         : dir_path_(path) {
         dir_ = ::opendir(path);
-        do {
-            auto dir_entry = ::readdir(dir_);
-            dir_entry_ = FileInfoImplUnix{dir_entry, dir_path_};
-        }
-        while (dir_entry_.name() == "." || dir_entry_.name() == "..");
+        next();
     }
 
     FileIterImplUnix(const String& path)
@@ -731,8 +739,7 @@ public:
         if (!dir_) {
             throw RuntimeError("Called next file for non-initialized iterator");
         }
-        auto dir_entry = ::readdir(dir_);
-        dir_entry_ = FileInfoImplUnix{dir_entry, dir_path_};
+        next();
         return *this;
     }
 
@@ -783,8 +790,17 @@ public:
     //const String& path() const { return path_; }
 
     static PathImplUnix tmp_dir() {
-        static Self tmp_path = getenv("TMPDIR");
-        return tmp_path;
+        static const char* tmp_path = getenv("TMPDIR");
+        static Self tmp;
+        if (tmp_path) {
+            tmp = tmp_path;
+        } else {
+            tmp = "/tmp";
+            // HACK FOR UNIX? FIXME
+            //throw RuntimeError("No TMPDIR in env");
+        }
+
+        return tmp;
     }
 
     static const PathImplUnix cwd() {

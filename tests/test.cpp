@@ -107,27 +107,24 @@ TEST(iter_dir, dir0) {
     const auto dir = crefile::Path{TestsDir, "iter_dir"};
     crefile::Path{dir, "a"}.mkdir_parents();
     crefile::Path{dir, "b"}.mkdir_parents();
-    std::vector<std::string> filenames;
+    std::set<std::string> filenames;
     for (auto file : crefile::iter_dir(dir)) {
-        filenames.push_back(file.name());
+        filenames.insert(file.name());
     }
-    const auto files = std::vector<std::string>{"a", "b"};
+    const auto files = std::set<std::string>{"a", "b"};
     ASSERT_EQ(files, filenames);
 }
 
 
 TEST(examples, simple) {
     auto foo_path = crefile::Path{"foo"};
-
     foo_path.mkdir();
 
-    //crefile::cd(foo_path.mkdir("bar"));
+    std::ofstream a_file((foo_path / "a.txt").c_str());
+    a_file << "Hello" << std::endl;
 
-    std::ofstream bar_file(crefile::join(foo_path, "a.txt"));
-    bar_file << "Hello" << std::endl;
-
-    std::ofstream bar_file2(crefile::join(foo_path, "b.txt"));
-    bar_file2 << "World!" << std::endl;
+    std::ofstream b_file((foo_path / "b.txt").c_str());
+    b_file << "World!" << std::endl;
 
     for (auto file : crefile::iter_dir(foo_path)) {
         std::cout << file.name() << " ";
