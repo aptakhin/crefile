@@ -115,6 +115,14 @@ TEST(iter_dir, dir0) {
     ASSERT_EQ(files, filenames);
 }
 
+TEST(iter_dir, tmp) {
+    const auto dir = crefile::Path{"/tmp"};
+    for (auto file : crefile::iter_dir(dir)) {
+        std::cout << file.name() << std::endl;
+    }
+}
+
+
 
 TEST(examples, simple) {
     auto foo_path = crefile::Path{"foo"};
@@ -136,7 +144,7 @@ TEST(examples, simple) {
 int main(int argc, char* argv[]) {
     ::testing::InitGoogleTest(&argc, argv);
     TestsDir = crefile::Path{crefile::tmp_dir(), "crefile_tests"};
-    TestsDir.rmrf_if_exists().mkdir_if_not_exists();
+    TestsDir.rmrf_if_exists().mkdir();
     std::cout << "Tests dir: " << TestsDir.str() << std::endl;
     int result = RUN_ALL_TESTS();
     return result;
