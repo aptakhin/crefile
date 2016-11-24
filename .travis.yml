@@ -5,4 +5,4 @@ os:
 dist: trusty
 language: cpp
 compiler: clang++
-script: clang++ tests/test.cpp tests/gtest/gtest-all.cc -Wc++11-extensions -I ./ -I tests --std=c++11 -stdlib=libstdc++ -lpthread && ./a.out
+script: clang++ tests/test.cpp tests/gtest/gtest-all.cc -Wc++11-extensions -I ./ -I tests --std=c++11 -lpthread && ./a.out
