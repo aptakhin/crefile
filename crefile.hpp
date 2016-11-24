@@ -543,13 +543,35 @@ public:
     }
 
     static const PathImplWin32& rm(const PathImplWin32& path) {
-        //const auto res = ::remove(path.path_to_host());
-        //check_error(res);
-        return path;
+       if (path.is_directory()) {
+           path.rm_directory();
+       } else {
+           path.rm_file();
+       }
+ 
+       return path;
     }
 
     const PathImplWin32& rm() const {
         return Self::rm(*this);
+    }
+
+    static const PathImplWin32& rm_directory(const PathImplWin32& path) {
+        RemoveDirectory(path.c_str()); // FIXME
+        return path;
+    }
+
+    const PathImplWin32& rm_directory() const {
+        return Self::rm_directory(*this);
+    }
+
+    static const PathImplWin32& rm_file(const PathImplWin32& path) {
+        DeleteFile(path.c_str()); // FIXME
+        return path;
+    }
+
+    const PathImplWin32& rm_file() const {
+        return Self::rm_file(*this);
     }
 
     static const PathImplWin32& rmrf(const PathImplWin32& path) {

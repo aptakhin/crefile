@@ -54,13 +54,18 @@ TEST(win32, abspath) {
     ASSERT_EQ(crefile::Path(crefile::cwd(), "a/b/c"), crefile::Path("a/b/c.txt").abspath());
 }
 
-TEST(dir, no_permissions) {
+TEST(dir_win32, no_permissions) {
     //ASSERT_THROW(crefile::Path{"/usr/bin/not_existing_folder_in_usr_bin"}.mkdir(), crefile::NoPermissionException);
 }
 
-TEST(dir, not_directory) {
+TEST(dir_win32, not_directory) {
     //ASSERT_THROW(crefile::Path{"/dev/null/not_directory"}.mkdir(), crefile::NotDirectoryException);
 }
+
+TEST(dir_win32, not_directory) {
+    //ASSERT_THROW(crefile::Path{"/dev/null/not_directory"}.mkdir(), crefile::NotDirectoryException);
+}
+
 #endif
 
 #if CREFILE_PLATFORM != CREFILE_PLATFORM_WIN32
@@ -69,16 +74,21 @@ TEST(posix, path_join) {
     ASSERT_EQ("a/b/c", crefile::Path("a/b", "c"));
 }
 
-TEST(posix, abspath) {
+TEST(dir_posix, abspath) {
     ASSERT_EQ(crefile::Path(crefile::cwd(), "a/b/c.txt"), crefile::Path("a/b/c.txt").abspath());
 }
 
-TEST(dir, no_permissions) {
+TEST(dir_posix, no_permissions) {
     ASSERT_THROW(crefile::Path{"/usr/bin/not_existing_folder_in_usr_bin"}.mkdir(), crefile::NoPermissionException);
 }
 
-TEST(dir, not_directory) {
+TEST(dir_posix, not_directory) {
     ASSERT_THROW(crefile::Path{"/dev/null/not_directory"}.mkdir(), crefile::NotDirectoryException);
+}
+
+TEST(dir_posix, not_existing_folder) {
+    const auto dir = crefile::Path{TestsDir, "not_existing_folder", "a"};
+    ASSERT_THROW(dir.mkdir(), crefile::NoSuchFileException);
 }
 #endif
 
@@ -96,11 +106,6 @@ TEST(dir, children) {
 
 //    auto file = crefile::generate_tmp_filename(runtests_a_b, "crefile_test_");
 //    std::cout << "Fname: " << file.path() << std::endl;
-}
-
-TEST(dir, not_existing_folder) {
-    const auto dir = crefile::Path{TestsDir, "not_existing_folder", "a"};
-    ASSERT_THROW(dir.mkdir(), crefile::NoSuchFileException);
 }
 
 
