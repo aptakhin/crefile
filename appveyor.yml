@@ -1,0 +1,3 @@
+before_build:
+  - clang++ tests/test.cpp tests/gtest/gtest-all.cc -Wc++11-extensions -I ./ -I tests --std=c++11 -lpthread
+  - a.exe
