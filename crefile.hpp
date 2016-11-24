@@ -333,13 +333,6 @@ bool operator < (const WinPath& a, const WinPath& b) {
     return a.str() < b.str();
 }
 
-//#if CREFILE_PLATFORM == CREFILE_PLATFORM_WIN32
-//const char DefaultSeparator = '\\';
-//#else
-//const char DefaultSeparator = '/';
-//#endif
-
-
 #if CREFILE_PLATFORM == CREFILE_PLATFORM_WIN32
 
 class FileInfoImplWin32 {
@@ -571,19 +564,6 @@ PathImplWin32 generate_tmp_filename(const PathImplWin32& path, const String& fil
 
 #if CREFILE_PLATFORM == CREFILE_PLATFORM_UNIX || CREFILE_PLATFORM == CREFILE_PLATFORM_DARWIN
 
-//template <typename Exc>
-//void winerror(int error_code, String&& win_error, const char* file, int line) {
-//    if (error_code != 0) {
-//        std::ostringstream err;
-//        err << win_error << " (win error: " << error_code << ", str: " << translate_error_code2string(error_code) << ") at file " << file << ":" << line;
-//        throw Exc(err.str());
-//    }
-//}
-//
-//#define CREFILE_UNIXERROR(ret_code, exc, win_error) { winerror<exc>(GetLastError(), (win_error), __FILE__, __LINE__); }
-//
-//#define CREFILE_UNIXCHECK(ret_code, exc, win_error) { if (!(ret_code)) { winerror<exc>(GetLastError(), (win_error), __FILE__, __LINE__); } }
-//
 void check_error(ErrorCode code) {
     if (code != 0) {
         const auto error = errno;
@@ -614,30 +594,16 @@ private:
     struct stat* get_stat() const {
         valid();
         if (!stat_) {
-            //stat_.reset(new struct stat);
-            stat_ = new struct stat;
+            stat_ = std::make_shared<struct stat>();
             const auto path = PosixPath(from_dir_, entry_->d_name);
-            const auto res = lstat(path.c_str(), stat_);
+            const auto res = lstat(path.c_str(), stat_.get());
             check_error(res);
         }
-        return stat_;
+        return stat_.get();
     }
 
 public:
-    FileInfoImplUnix() {
-
-    }
-
-    ~FileInfoImplUnix() {
-        delete stat_;
-    }
-
-
-//    FileInfoImplUnix(FileInfoImplUnix from)
-//    :   entry_(std::move(from.entry_)),
-//        stat_(std::move(from.stat_)) {
-//
-//    }
+    FileInfoImplUnix() = default;
 
     FileInfoImplUnix(dirent* entry, PosixPath from_dir)
     :   entry_(entry),
@@ -666,8 +632,7 @@ public:
 
 private:
     struct dirent* entry_ = nullptr;
-    //mutable std::unique_ptr<struct stat> stat_;
-    mutable struct stat* stat_ = nullptr;
+    mutable std::shared_ptr<struct stat> stat_;
 
     PosixPath from_dir_;
 };
@@ -790,8 +755,6 @@ public:
         return path.c_str();
     }
 
-    //const String& path() const { return path_; }
-
     static PathImplUnix tmp_dir() {
         static const char* tmp_path = getenv("TMPDIR");
         static Self tmp;
@@ -866,15 +829,11 @@ public:
     }
 
     static const PathImplUnix& rmrf(const PathImplUnix& path) {
-        //throw NotImplementedException();
         FileIterImplUnix iter{path.str()};
-        //std::cout << "Sca: " << path.str() << std::endl;
         while (!iter.is_end()) {
             if (iter.is_directory()) {
-                //std::cout << "  (D): " << iter.path().str() << std::endl;
                 Self{iter.path()}.rmrf();
             } else {
-                //std::cout << "  (f): " << iter.path().str() << std::endl;
                 Self{iter.path()}.rm();
             }
             ++iter;
@@ -907,10 +866,6 @@ public:
         return res == 0;
     }
 };
-
-//bool operator == (const PathImplUnix& a, const PathImplUnix& b) {
-//  a.path
-//}
 
 typedef PathImplUnix Path;
 
