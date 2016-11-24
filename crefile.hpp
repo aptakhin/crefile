@@ -3,6 +3,7 @@
 #include <vector>
 #include <sstream>
 #include <iostream>
+#include <exception>
 
 #define CREFILE_PLATFORM_DARWIN 8
 #define CREFILE_PLATFORM_UNIX 16
