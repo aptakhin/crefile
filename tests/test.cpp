@@ -124,22 +124,22 @@ TEST(iter_dir, tmp) {
 
 
 
-TEST(examples, simple) {
-    auto foo_path = crefile::Path{"foo"};
-    foo_path.mkdir();
-
-    std::ofstream a_file((foo_path / "a.txt").c_str());
-    a_file << "Hello" << std::endl;
-
-    std::ofstream b_file((foo_path / "b.txt").c_str());
-    b_file << "World!" << std::endl;
-
-    for (auto file : crefile::iter_dir(foo_path)) {
-        std::cout << file.name() << " ";
-    }
-    // a.txt b.txt
-
-}
+//TEST(examples, simple) {
+//    auto foo_path = crefile::Path{"foo"};
+//    foo_path.rmrf_if_exists().mkdir();
+//
+//    std::ofstream a_file(foo_path / "a.txt");
+//    a_file << "Hello" << std::endl;
+//
+//    std::ofstream b_file(foo_path / "b.txt");
+//    b_file << "World!" << std::endl;
+//
+//    for (auto file : crefile::iter_dir(foo_path)) {
+//        std::cout << file.name() << " ";
+//    }
+//    // a.txt b.txt
+//
+//}
 
 int main(int argc, char* argv[]) {
     ::testing::InitGoogleTest(&argc, argv);

@@ -230,6 +230,12 @@ public:
         return path[0] == Policy::Separator;
     }
 
+
+protected:
+    String str_move() {
+        return std::move(path_);
+    }
+
 private:
     String path_;
 };
@@ -838,6 +844,7 @@ public:
             }
             ++iter;
         }
+        path.rm();
         return path;
     }
 
@@ -864,6 +871,10 @@ public:
         struct stat st;
         const auto res = ::stat(path.path_to_host(), &st);
         return res == 0;
+    }
+
+    operator String&&() {
+        return std::move(str_move());
     }
 };
 
