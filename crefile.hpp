@@ -70,6 +70,7 @@ class RuntimeError : public BaseException, public std::runtime_error {
 public:
     RuntimeError() : std::runtime_error(String{}) {}
     RuntimeError(const char* message) : std::runtime_error(message) {}
+    RuntimeError(String message) : std::runtime_error(message) {}
 };
 
 
@@ -353,6 +354,10 @@ public:
         return String{find_data_.cFileName};
     }
 
+    bool is_directory() const {
+        return find_data_.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY;
+    }
+
 private:
     WIN32_FIND_DATA find_data_;
 };
@@ -379,12 +384,88 @@ void winerror(int error_code, String&& win_error, const char* file, int line) {
     }
 }
 
-}; // namespace priv {
 
-#define WINERROR(ret_code, exc, win_error) { priv::winerror<exc>(GetLastError(), (win_error), __FILE__, __LINE__); }
+#define WINERROR(error, exc, win_error) { priv::winerror<exc>(error, (win_error), __FILE__, __LINE__); }
 
 #define WINCHECK(ret_code, exc, win_error) { if (!(ret_code)) { priv::winerror<exc>(GetLastError(), (win_error), __FILE__, __LINE__); } }
 
+}; // namespace priv {
+
+
+class FileIterImplWin32 {
+public:
+    FileIterImplWin32()
+        : handle_{0},
+        end_{true} {
+
+    }
+
+    ~FileIterImplWin32() {
+        if (handle_) {
+            FindClose(handle_);
+        }
+    }
+
+    FileIterImplWin32(const String& path)
+        : dir_path_(path) {
+        // TODO: Extend MAX_PATH
+        WINCHECK(handle_ = FindFirstFile(path.c_str(), find_data_.native_ptr()),
+            std::runtime_error, "FindFirstFile failed");
+    }
+
+    bool operator == (const FileIterImplWin32& other) const {
+        return end_ && other.end_;
+    }
+
+    bool operator != (const FileIterImplWin32& other) const {
+        return !(*this == other);
+    }
+
+    FileIterImplWin32& operator ++() {
+        auto res = FindNextFile(handle_, find_data_.native_ptr());
+
+        if (!res) {
+            const auto error = GetLastError();
+            if (error == ERROR_NO_MORE_FILES) {
+                end_ = true;
+            }
+            else {
+                WINERROR(error, std::runtime_error, "FindNextFile failed");
+            }
+        }
+
+        return *this;
+    }
+
+    FileInfoImplWin32 operator *() const {
+        return find_data_;
+    }
+
+    bool is_end() const {
+        return end_;
+    }
+
+    bool is_directory() const {
+        return find_data_.is_directory();
+    }
+
+    const WinPath& dir_path() const {
+        return dir_path_;
+    }
+
+    WinPath path() const {
+        if (!handle_) {
+            throw RuntimeError("Called path() for non-initialized iterator");
+        }
+        return WinPath{dir_path_, find_data_.name()};
+    }
+
+private:
+    WinPath dir_path_;
+    HANDLE handle_;
+    bool end_ = false;
+    FileInfoImplWin32 find_data_;
+};
 
 class PathImplWin32 : public WinPath {
 public:
@@ -393,15 +474,21 @@ public:
     PathImplWin32() {}
 
     PathImplWin32(const String& path)
-    :   path_{path} {
+    : WinPath{path} {
     }
 
     PathImplWin32(const char* path)
-    :   path_{path} {
+    : WinPath{path} {
     }
 
+    template<typename ... Types>
+    PathImplWin32(Types... args)
+    : WinPath{args...} {
+    }
+    
+
     PathImplWin32 abspath() const {
-        return Self{Self::cwd(), path_};
+        return Self{Self::cwd(), str()};
     }
 
     const PathImplWin32& mkdir() const {
@@ -409,13 +496,13 @@ public:
     }
 
     static const PathImplWin32& mkdir(const PathImplWin32& path) {
-        WINCHECK(CreateDirectory(path_to_host(path), NULL),
+        WINCHECK(CreateDirectory(path.c_str(), NULL),
             RuntimeError, "CreateDirectory failed");
         return path;
     }
 
     static const PathImplWin32& mkdir_if_not_exists(const PathImplWin32& path) {
-        const auto res = CreateDirectory(path_to_host(path), NULL);
+        const auto res = CreateDirectory(path.c_str(), NULL);
         if (!res) {
             auto const error = GetLastError();
             if (error != 0 && error != ERROR_ALREADY_EXISTS) {
@@ -444,8 +531,60 @@ public:
         return PathImplWin32::mkdir_parents(*this);
     }
 
+    static const PathImplWin32& rmrf_if_exists(const PathImplWin32& path) {
+        if (path.exists()) {
+            return path.rmrf();
+        }
+        return path;
+    }
+
+    const PathImplWin32& rmrf_if_exists() const {
+        return Self::rmrf_if_exists(*this);
+    }
+
+    static const PathImplWin32& rm(const PathImplWin32& path) {
+        //const auto res = ::remove(path.path_to_host());
+        //check_error(res);
+        return path;
+    }
+
+    const PathImplWin32& rm() const {
+        return Self::rm(*this);
+    }
+
+    static const PathImplWin32& rmrf(const PathImplWin32& path) {
+        FileIterImplWin32 iter{path.str()};
+        while (!iter.is_end()) {
+            if (iter.is_directory()) {
+                Self{iter.path()}.rmrf();
+            }
+            else {
+                Self{iter.path()}.rm();
+            }
+            ++iter;
+        }
+        path.rm();
+        return path;
+    }
+
+    const PathImplWin32& rmrf() const {
+        return Self::rmrf(*this);
+    }
+
+    static PathImplWin32 tmp_dir() {
+        static Self tmp = tmp_dir_impl();
+        return tmp;
+    }
+
+    static PathImplWin32 cwd() {
+        TCHAR buffer[MAX_PATH + 1];
+        WINCHECK(GetCurrentDirectory(sizeof(buffer), buffer),
+            RuntimeError, "cwd fail");
+        return Self{buffer};
+    }
+
     std::vector<String> split() const {
-        return crefile::split(path_);
+        return crefile::split(str());
     }
     
     bool exists() const {
@@ -454,112 +593,39 @@ public:
 
     static bool exists(const PathImplWin32& path) {
         WIN32_FIND_DATA file_data;
-        HANDLE handle = FindFirstFile(path.path_.c_str(), &file_data);
+        HANDLE handle = FindFirstFile(path.c_str(), &file_data);
         bool found = (handle != INVALID_HANDLE_VALUE);
         if (found) {
             FindClose(handle);
         }
         return found;
     }
-    
-  /*  template<typename ... Types>
-    String join(Types... args) {
-        String buf;
-        path_join_impl(buf, args...);
-        return buf;
-    }*/
-    
-    String path_dirname(const String& filename) {
-        auto last_slash = filename.find_last_of('/');
-        if (last_slash == String::npos) {
-            last_slash = filename.find_last_of("\\\\");
-            if (last_slash == String::npos) {
-                return filename;
-            }
-        }
-        return filename.substr(0, last_slash);
-    }
-
-    String path_extension(const String& filename) {
-        const auto last_dot = filename.find_last_of('.');
-        if (last_dot == String::npos) {
-            return "";
-        } else {
-            return filename.substr(last_dot + 1);
-        }
+  
+private:
+    static PathImplWin32 tmp_dir_impl() {
+        TCHAR buffer[MAX_PATH + 1];
+        WINCHECK(GetCurrentDirectory(sizeof(buffer), buffer),
+            RuntimeError, "tmp_dir_impl fail");
+        return Self{buffer};
     }
 };
 
 
 typedef PathImplWin32 Path;
-
-class FileIterImplWin32 {
-public:
-    FileIterImplWin32()
-    :   handle_{0},
-        end_{true} {
-
-    }
-
-    ~FileIterImplWin32() {
-        if (handle_) {
-            FindClose(handle_);
-        }
-    }
-
-    FileIterImplWin32(const String& path) {
-        // TODO: Extend MAX_PATH
-        WINCHECK(handle_ = FindFirstFile(path.c_str(), find_data_.native_ptr()),
-            std::runtime_error, "FindFirstFile failed");
-    }
-
-    bool operator == (const FileIterImplWin32& other) const {
-        return end_ && other.end_;
-    }
-
-    bool operator != (const FileIterImplWin32& other) const {
-        return !(*this == other);
-    }
-
-    FileIterImplWin32& operator ++() {
-        auto res = FindNextFile(handle_, find_data_.native_ptr());
-
-        if (!res) {
-            const auto error = GetLastError();
-            if (error == ERROR_NO_MORE_FILES) {
-                end_ = true;
-            } else {
-                WINERROR(error, std::runtime_error, "FindNextFile failed");
-            }
-        }
-
-        return *this;
-    }
-
-    FileInfoImplWin32 operator *() const {
-        return find_data_;
-    }
-
-private:
-    HANDLE handle_;
-    bool end_ = false;
-    FileInfoImplWin32 find_data_;
-};
-
 typedef FileInfoImplWin32 FileInfo;
 typedef FileIterImplWin32 FileIter;
 
-PathImplWin32 get_tmp_path() {
-    char tmp_path[MAX_PATH + 1];
-    WINCHECK(GetTempPath(sizeof(tmp_path) - 1, tmp_path),
-        std::runtime_error, "GetTempPath failed");
-    return PathImplWin32{tmp_path};
-}
+//PathImplWin32 get_tmp_path() {
+//    char tmp_path[MAX_PATH + 1];
+//    WINCHECK(GetTempPath(sizeof(tmp_path) - 1, tmp_path),
+//        std::runtime_error, "GetTempPath failed");
+//    return PathImplWin32{tmp_path};
+//}
 
 PathImplWin32 generate_tmp_filename(const PathImplWin32& path, const String& file_prefix) {
     char tmp[MAX_PATH + 1];
-    WINCHECK(GetTempFileName(path.path_to_host(), file_prefix.c_str(), 0, tmp),
-        std::runtime_error, "GetTempFileName failed");
+    WINCHECK(GetTempFileName(path.c_str(), file_prefix.c_str(), 0, tmp),
+        std::runtime_error, "generate_tmp_filename failed");
     return PathImplWin32{tmp};
 }
 
